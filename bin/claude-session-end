@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Claude Code SessionEnd hook: remove this pane's metrics file so tab-right
+# stops treating the pane as a Claude pane. Keeps the account file.
+set -uo pipefail
+here="$(dirname "$(readlink -f "$0")")"
+source "$here/../lib/common.sh"
+cat >/dev/null
+[ -n "${HERDR_PANE_ID:-}" ] && rm -f "$(herdr_metrics_file "$HERDR_PANE_ID")"
+exit 0

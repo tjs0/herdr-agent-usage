@@ -1,0 +1,38 @@
+id = "agent-usage"
+name = "Agent Usage"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "Claude Code, Codex and agy rate limits in a popup and the tab bar, plus per-pane context on the sidebar"
+# The scripts use GNU tools (tac, find -printf, stat -c, flock, date +%s%N).
+platforms = ["linux"]
+
+# Commands run with the plugin root as their working directory, so paths below
+# are relative to it. Bind the popup with
+#   [[keys.command]] type = "plugin_action", command = "agent-usage.popup"
+[[actions]]
+id = "popup"
+title = "Agent usage popup"
+contexts = ["global"]
+command = ["bash", "bin/agent-limits", "popup"]
+
+# Creates $HERDR_PLUGIN_CONFIG_DIR/bin, a stable path to the scripts for
+# configs. Also runs at every server start; run it after install and update.
+[[actions]]
+id = "link"
+title = "Link scripts into the config dir"
+contexts = ["global"]
+command = ["bash", "lib/link-bin"]
+
+[[startup]]
+command = ["bash", "lib/link-bin"]
+
+# Opened by `agent-limits popup`, which sizes the popup to the table. Herdr
+# trims whitespace off titles, so two braille blanks (U+2800) on each side
+# pad it: the title starts in the content's column, past its two-column
+# margin, with the same gap before the border resumes. Border characters as
+# padding would not match: Herdr colors the border, not the title.
+[[panes]]
+id = "usage"
+title = "⠀⠀Agent Usage⠀⠀"
+placement = "popup"
+command = ["bash", "bin/agent-limits", "watch"]

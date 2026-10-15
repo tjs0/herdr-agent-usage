@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# Account-wide rate limits for the coding agents, one rendered line per limit
+# group, as "5h 18% 3h12m  7d 61% 4d".
+#
+#   agent-limits codex   5h/7d from the newest Codex session log
+#   agent-limits agy     agy's Gemini 5h/weekly, from `agy -p /usage`
+#   agent-limits agy --3p  agy's third-party (Claude and GPT) 5h/weekly
+#   agent-limits claude  5h/7d from the shared Claude account file
+#   agent-limits all     every agent above as a labeled, column-aligned table
+#   agent-limits watch   `all`, redrawn every 5s until a key is pressed
+#   agent-limits popup   open `watch` in the Agent Usage popup, sized to fit
+#
+# Codex writes rate_limits into its rollout JSONL on each turn, so its numbers
+# are only as fresh as the last Codex turn. agy answers `-p /usage` without an
+# agent turn or quota; the reply is cached for AGY_TTL seconds and refreshed in
+# the background so callers polling every second never block on it.
+set -uo pipefail
+here="$(dirname "$(readlink -f "$0")")"
+source "$here/../lib/common.sh"
+
+AGY_TTL="${AGY_TTL:-60}"
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/agent-limits"
+now="$(date +%s)"
+
+# Newest rollout's last rate_limits with primary limits as five lines:
+# 5h / reset / 7d / reset / plan. Inspects recent rollouts from newest to
+# oldest to skip empty/review sessions and ignores trailing null-primary events.
+codex_metrics() {
+  local root="${CODEX_HOME:-$HOME/.codex}/sessions" f line
+  [ -d "$root" ] || return 0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    line="$(tac "$f" 2>/dev/null | grep -m1 '"primary":{"used_percent"' || true)"
+    if [ -n "$line" ]; then
+      printf '%s\n' "$line" | jq -r '.payload.rate_limits |
+        (.primary.used_percent // ""), (.primary.resets_at // ""),
+        (.secondary.used_percent // ""), (.secondary.resets_at // "")' 2>/dev/null
+      return 0
+    fi
+  done < <(find "$root" -name 'rollout-*.jsonl' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | head -20 | cut -d' ' -f2-)
+}
+
+# agy /usage JSON on stdin -> per group five lines:
+#   label / 5h used% / 5h reset epoch / weekly used% / weekly reset epoch
+# Label: "Claude and GPT models" -> "claude/gpt". Used = 100 - remaining.
+agy_metrics_from_json() {
+  jq -r '
+    def used: if . == null then "" else ((1 - .remaining_fraction) * 100 | round) end;
+    def epoch: if . == null then "" else (.reset_time | sub("\\.[0-9]+"; "") | fromdateiso8601) end;
+    .command.data.groups[] |
+    (.buckets | map({key: .window, value: .}) | from_entries) as $b |
+    (.name | ascii_downcase | sub(" models$"; "") | gsub(" and "; "/")),
+    ($b["5h"] | used), ($b["5h"] | epoch),
+    ($b.weekly | used), ($b.weekly | epoch)'
+}
+
+# Kick off a background `agy -p /usage` into the cache when it is stale.
+# Detached via setsid so Herdr terminating tab-right's process group on
+# each 1s tab tick does not SIGKILL the refresh mid-run.
+agy_refresh() {
+  local f="$cache_dir/agy.json" agy mtime
+  mtime="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+  [ $(( now - mtime )) -ge "$AGY_TTL" ] || return 0
+  agy="${AGY_BIN:-$(command -v agy || echo "$HOME/.local/bin/agy")}"
+  [ -x "$agy" ] || return 0
+  mkdir -p "$cache_dir"
+  setsid -f bash -c '
+    exec 9> "'"$cache_dir"'/agy.lock"
+    flock -n 9 || exit 0
+    cd "$HOME" || exit 0
+    tmp="'"$cache_dir"'/agy.json.tmp.$$"
+    timeout 30 "'"$agy"'" -p /usage --output-format json > "$tmp" 2>/dev/null \
+      && jq -e .command.data.groups "$tmp" >/dev/null 2>&1 \
+      && mv -f "$tmp" "'"$f"'"
+    rm -f "$tmp"
+  ' </dev/null >/dev/null 2>&1
+}
+
+# Claude's 5h/7d from the account file every session's statusLine merges into.
+claude_metrics() {
+  cat "$(claude_limits_file)" 2>/dev/null
+}
+
+# Single-agent mode: one fmt_right line, after LABEL when given (agy's model
+# groups). Table mode (`all`): one tab-separated row for `align`, a window's
+# percentage and countdown in separate fields, with fmt_window's rules: a
+# passed reset shows 0% and no countdown, an absent window stays empty.
+table=0
+render() {  # LABEL FIVE RESET5 SEVEN RESET7
+  local label="$1" line
+  if [ "$table" = 1 ]; then
+    [ -n "$2$4" ] || return 0
+    printf '%s\t%s\t%s\n' "$label" "$(cell "$2" "$3")" "$(cell "$4" "$5")"
+  else
+    line="$(fmt_right '' "$2" "$3" "$4" "$5" "$now")"
+    [ -n "$line" ] && printf '%s\n' "${label:+$label }$line"
+  fi
+  return 0
+}
+
+cell() {  # PCT RESET -> "PCT%<tab>COUNTDOWN", or one empty tab when absent
+  local pct="${1%.*}" reset="$2"
+  if [ -z "$pct" ]; then
+    printf '\t'
+  elif [ -n "$reset" ] && [ "$reset" -le "$now" ]; then
+    printf '0%%\t'
+  else
+    printf '%s%%\t%s' "$pct" "$(fmt_countdown "${reset:-0}" "$now")"
+  fi
+}
+
+# Lay render's table rows out as compactly as the data allows: each column as
+# wide as its widest value, percentages right-aligned, two spaces between the
+# label and each window, trailing blanks dropped.
+align() {
+  awk -F '\t' '
+    { n = NR; for (f = 1; f <= 5; f++) { v[n, f] = $f; if (length($f) > w[f]) w[f] = length($f) } }
+    function win(name, p, r, wp, wr,   s) {
+      s = (p == "") ? sprintf("%*s", length(name) + 1 + wp, "") : sprintf("%s %*s", name, wp, p)
+      if (wr > 0) s = s " " sprintf("%-*s", wr, r)
+      return s
+    }
+    END {
+      for (i = 1; i <= n; i++) {
+        s = sprintf("%-*s  %s  %s", w[1], v[i, 1],
+          win("5h", v[i, 2], v[i, 3], w[2], w[3]), win("7d", v[i, 4], v[i, 5], w[4], w[5]))
+        sub(/ +$/, "", s); print s
+      }
+    }'
+}
+
+# The watch screen: a blank line and two columns of margin around the table.
+footer="any key closes"
+screen() {
+  local out
+  out="$("$0" all)"
+  printf '\n%s\n\n  \033[2m%s\033[0m' \
+    "$(printf '%s\n' "${out:-no limits recorded yet}" | sed 's/^/  /')" "$footer"
+}
+
+show_codex() {
+  local m; mapfile -t m < <(codex_metrics)
+  render "${1:+codex}" "${m[0]:-}" "${m[1]:-}" "${m[2]:-}" "${m[3]:-}"
+}
+
+# show_agy LABEL [gemini|3p]: every model group, or only Gemini's or only the
+# third-party (non-Gemini) groups.
+show_agy() {
+  agy_refresh
+  local f="$cache_dir/agy.json" only="${2:-}" m i label
+  [ -r "$f" ] || return 0
+  mapfile -t m < <(agy_metrics_from_json < "$f" 2>/dev/null)
+  for (( i = 0; i + 4 < ${#m[@]}; i += 5 )); do
+    case "$only:${m[i]}" in
+      gemini:gemini | 3p:gemini) [ "$only" = gemini ] || continue ;;
+      gemini:*) continue ;;
+    esac
+    label=agy; [ "${m[i]}" = gemini ] || label="agy 3p"
+    render "${1:+$label}" "${m[i+1]}" "${m[i+2]}" "${m[i+3]}" "${m[i+4]}"
+  done
+}
+
+show_claude() {
+  local m; mapfile -t m < <(claude_metrics)
+  render "${1:+claude}" "${m[0]:-}" "${m[1]:-}" "${m[2]:-}" "${m[3]:-}"
+}
+
+case "${1:-all}" in
+  codex)  show_codex ;;
+  agy)
+    case "${2:-}" in
+      '')    show_agy '' gemini ;;
+      --3p)  show_agy '' 3p ;;
+      *) echo "usage: agent-limits agy [--3p]" >&2; exit 2 ;;
+    esac ;;
+  claude) show_claude ;;
+  all)    table=1; { show_claude label; show_codex label; show_agy label; } | align ;;
+  watch)
+    printf '\033[?25l'
+    while :; do
+      printf '\033[H\033[2J%s' "$(screen)"
+      read -rsn1 -t 5 && break
+    done ;;
+  popup)
+    # Open the agent-usage plugin's popup sized to the current screen: its
+    # widest line plus two columns of right margin, Herdr's scrollbar column
+    # and the border; its lines plus a blank bottom row and the border.
+    s="$(screen | sed 's/\x1b\[[0-9;]*m//g')"
+    w="$(printf '%s\n' "$s" | awk '{ if (length($0) > w) w = length($0) } END { print w + 0 }')"
+    h="$(printf '%s\n' "$s" | wc -l)"
+    "${HERDR_BIN_PATH:-herdr}" plugin pane open --plugin agent-usage --entrypoint usage \
+      --width "$(( w + 2 + 1 + 2 ))" --height "$(( h + 1 + 2 ))" >/dev/null ;;
+  *) echo "usage: agent-limits [codex|agy [--3p]|claude|all|watch|popup]" >&2; exit 2 ;;
+esac
+exit 0

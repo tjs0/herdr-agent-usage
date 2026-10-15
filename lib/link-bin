@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Point $HERDR_PLUGIN_CONFIG_DIR/bin at this install's bin/, so configs can
+# name scripts by a path that survives `herdr plugin update` (an update puts
+# the plugin in a new directory). Run at server start and by the `link` action.
+set -uo pipefail
+root="${HERDR_PLUGIN_ROOT:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
+cfg="${HERDR_PLUGIN_CONFIG_DIR:-}"
+[ -n "$cfg" ] || { echo "link-bin: HERDR_PLUGIN_CONFIG_DIR unset" >&2; exit 1; }
+mkdir -p "$cfg" && ln -sfn "$root/bin" "$cfg/bin" && echo "$cfg/bin -> $root/bin"

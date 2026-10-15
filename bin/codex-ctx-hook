@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Codex hook (SessionStart, Stop, PostToolUse): report the session's context
+# usage as the Herdr $ctx pane token, which the agent sidebar shows on Codex rows.
+#
+# Hook JSON on stdin carries transcript_path, the session's rollout JSONL. Its
+# last token_count event with `info` holds the latest request's token total and
+# the model's context window. The percentage is Codex's own: a fixed baseline
+# of always-present tokens comes off both, so it matches the TUI's "% left"
+# (codex-rs/protocol TokenUsage::percent_of_context_window_remaining).
+# A session with no usage yet (startup, /clear) reports "?", replacing the
+# previous session's token on the pane.
+# Prints nothing and always exits 0, so it never blocks or alters a turn.
+set -uo pipefail
+BASELINE=12000
+
+input="$(cat)"
+[ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ] || exit 0
+herdr="${HERDR_BIN_PATH:-}"
+[ -n "$herdr" ] || exit 0
+
+rollout="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
+
+pct="$([ -r "$rollout" ] && tac "$rollout" 2>/dev/null | grep -m1 '"type":"token_count","info":{' \
+  | jq -r --argjson base "$BASELINE" '
+      .payload.info as $i
+      | ($i.model_context_window // 0) as $win
+      | ($i.last_token_usage.total_tokens // 0) as $tok
+      | if $win <= $base then empty else
+          (($win - $base) as $eff
+           | ([$tok - $base, 0] | max) as $used
+           | ([$eff - $used, 0] | max) as $left
+           | 100 - ($left / $eff * 100 | round))
+        end' 2>/dev/null)"
+pct="${pct:-?}"
+
+"$herdr" pane report-metadata "$HERDR_PANE_ID" \
+  --source custom:codex-metrics --token "ctx=ctx ${pct}%" \
+  --seq "$(date +%s%N)" >/dev/null 2>&1
+exit 0

@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Claude Code statusLine command. Prints the in-Claude status line and, inside
+# Herdr, records the pane's metrics for tab-right and reports the $ctx sidebar
+# token. Rate limits go through the account file (claude_limits_file).
+set -uo pipefail
+here="$(dirname "$(readlink -f "$0")")"
+source "$here/../lib/common.sh"
+
+# statusLine JSON arrives on stdin; fall back to $CLAUDE_STATUS_INPUT if empty.
+input="$(cat)"
+if [ -z "$input" ] && [ -n "${CLAUDE_STATUS_INPUT:-}" ] && [ -r "${CLAUDE_STATUS_INPUT}" ]; then
+  input="$(cat "$CLAUDE_STATUS_INPUT")"
+fi
+
+# One metric per line into an array (empty lines preserved as empty elements);
+# mapfile avoids the IFS-tab field-collapse that would shift missing-percentage
+# neighbours. Suppress jq stderr so non-JSON stdin never clutters Claude's log.
+mapfile -t metrics < <(printf '%s' "$input" | extract_metrics 2>/dev/null)
+ctx="${metrics[0]:-}"; five="${metrics[1]:-}"; reset5="${metrics[2]:-}"
+seven="${metrics[3]:-}"; reset7="${metrics[4]:-}"
+
+# Rate limits are account-wide: merge this session's into the shared file and
+# show the merged result, so every session (and agent-limits) agrees.
+if [ -n "$five$seven" ]; then
+  mapfile -t merged < <(merge_claude_limits "$five" "$reset5" "$seven" "$reset7")
+  if [ "${#merged[@]}" -eq 4 ]; then
+    five="${merged[0]}"; reset5="${merged[1]}"; seven="${merged[2]}"; reset7="${merged[3]}"
+  fi
+fi
+
+# In-Claude line: ctx%, plus 5h/7d when present (integers only).
+ctxd="${ctx%.*}"; ctxd="${ctxd:-?}"
+line="ctx ${ctxd}%"
+[ -n "$five" ]  && line="$line  5h ${five%.*}%"
+[ -n "$seven" ] && line="$line  7d ${seven%.*}%"
+printf '%s\n' "$line"
+
+# Herdr: per-pane metrics file for the tab bar, $ctx token for the sidebar.
+if [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+  f="$(herdr_metrics_file "$HERDR_PANE_ID")"
+  mkdir -p "$(dirname "$f")" 2>/dev/null
+  printf '%s\n' "$ctx" "$five" "$reset5" "$seven" "$reset7" > "$f.tmp" 2>/dev/null \
+    && mv -f "$f.tmp" "$f" 2>/dev/null
+  # A fresh or /clear'ed session has no percentage until its first reply; report
+  # "?" then, or the pane keeps the previous session's token.
+  if [ -n "${HERDR_BIN_PATH:-}" ]; then
+    "$HERDR_BIN_PATH" pane report-metadata "$HERDR_PANE_ID" \
+      --source custom:claude-metrics --token "ctx=ctx ${ctxd}%" \
+      --seq "$(date +%s%N)" >/dev/null 2>&1 &
+  fi
+fi

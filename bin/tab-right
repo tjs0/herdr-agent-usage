@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Herdr tab_bar_right command for the focused pane. Claude panes (those with a
+# metrics file from claude-statusline): 5h and 7d from the account file it
+# merges into; ctx is on the sidebar row.
+# Codex and agy panes: their account rate limits from agent-limits, agy's
+# model groups joined on one line. Empty output for any other pane.
+set -uo pipefail
+here="$(dirname "$(readlink -f "$0")")"
+source "$here/../lib/common.sh"
+pane="${HERDR_ACTIVE_PANE_ID:-}"
+[ -n "$pane" ] || exit 0
+f="$(herdr_metrics_file "$pane")"
+if [ -r "$f" ]; then
+  m=(); [ -r "$(claude_limits_file)" ] && mapfile -t m < "$(claude_limits_file)"
+  fmt_right '' "${m[0]:-}" "${m[1]:-}" "${m[2]:-}" "${m[3]:-}" "$(date +%s)"
+  exit 0
+fi
+agent="$("${HERDR_BIN_PATH:-herdr}" pane get "$pane" 2>/dev/null \
+  | jq -r '.result.pane.agent // empty' 2>/dev/null)"
+case "$agent" in
+  codex) "$here/agent-limits" codex ;;
+  agy)
+    g="$("$here/agent-limits" agy)"; t="$("$here/agent-limits" agy --3p)"
+    printf '%s%s%s' "$g" "${g:+${t:+ │ }}" "${t:+[3p] $t}" ;;
+esac
+exit 0
