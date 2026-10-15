@@ -44,12 +44,14 @@ codex_metrics() {
 # agy /usage JSON on stdin -> per group five lines:
 #   label / 5h used% / 5h reset epoch / weekly used% / weekly reset epoch
 # Label: "Claude and GPT models" -> "claude/gpt". Used = 100 - remaining.
+# A bucket agy marks disabled (the 5h one once the weekly limit is hit) has no
+# reset_time and does not apply, so its window stays empty.
 agy_metrics_from_json() {
   jq -r '
     def used: if . == null then "" else ((1 - .remaining_fraction) * 100 | round) end;
-    def epoch: if . == null then "" else (.reset_time | sub("\\.[0-9]+"; "") | fromdateiso8601) end;
+    def epoch: if .reset_time == null then "" else (.reset_time | sub("\\.[0-9]+"; "") | fromdateiso8601) end;
     .command.data.groups[] |
-    (.buckets | map({key: .window, value: .}) | from_entries) as $b |
+    (.buckets | map(select(.disabled != true) | {key: .window, value: .}) | from_entries) as $b |
     (.name | ascii_downcase | sub(" models$"; "") | gsub(" and "; "/")),
     ($b["5h"] | used), ($b["5h"] | epoch),
     ($b.weekly | used), ($b.weekly | epoch)'

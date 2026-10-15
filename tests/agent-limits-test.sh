@@ -49,6 +49,20 @@ JSON
 check "$("$bin/agent-limits" agy)" "5h 8% 2h0m  7d 2% 3d" "agy: gemini group only"
 check "$("$bin/agent-limits" agy --3p)" "5h 0% 2h0m  7d 0% 3d" "agy --3p: claude/gpt group only"
 
+# agy: a group past its weekly limit reports its 5h bucket as disabled, with
+# no reset_time. The disabled window is left out; the group still renders.
+cat > "$XDG_CACHE_HOME/agent-limits/agy.json" <<JSON
+{"command":{"data":{"groups":[
+ {"name":"Gemini Models","buckets":[
+  {"window":"weekly","remaining_fraction":0.978,"reset_time":"$(iso "$in3d")"},
+  {"window":"5h","remaining_fraction":0.919,"reset_time":"$(iso "$in2h")"}]},
+ {"name":"Claude and GPT models","buckets":[
+  {"window":"weekly","remaining_fraction":0,"reset_time":"$(iso "$in3d")"},
+  {"window":"5h","disabled":true,"remaining_fraction":0}]}]}}}
+JSON
+check "$("$bin/agent-limits" agy --3p)" "7d 100% 3d" "agy --3p: disabled 5h bucket left out"
+check "$("$bin/agent-limits" all | grep '^agy 3p')" "agy 3p               7d 100% 3d" "all: disabled 5h bucket blank"
+
 # agy: stale cache triggers detached background refresh.
 touch -d '2 minutes ago' "$XDG_CACHE_HOME/agent-limits/agy.json"
 fake_agy="$tmp/fake-agy"

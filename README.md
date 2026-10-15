@@ -175,7 +175,8 @@ agent-limits [all|claude|codex|agy [--3p]|watch|popup]
 ```
 
 `agy` is the Gemini model group and `agy --3p` the third-party Claude and GPT
-group.
+group. Once a group hits its weekly limit, agy marks its 5h window disabled
+and that window is left blank: `agy 3p  7d 100% 6d`.
 
 ## Tests
 
