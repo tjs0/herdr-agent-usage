@@ -63,6 +63,27 @@ JSON
 check "$("$bin/agent-limits" agy --3p)" "7d 100% 3d" "agy --3p: disabled 5h bucket left out"
 check "$("$bin/agent-limits" all | grep '^agy 3p')" "agy 3p               7d 100% 3d" "all: disabled 5h bucket blank"
 
+# agy: a model group other than Gemini's and the third-party one (such as
+# "Gemini 4 Argon") gets its own row, labeled by its distinguishing name, and
+# stays out of both the Gemini and the --3p line.
+cat > "$XDG_CACHE_HOME/agent-limits/agy.json" <<JSON
+{"command":{"data":{"groups":[
+ {"name":"Gemini Models","buckets":[
+  {"window":"weekly","remaining_fraction":0.978,"reset_time":"$(iso "$in3d")"},
+  {"window":"5h","remaining_fraction":0.919,"reset_time":"$(iso "$in2h")"}]},
+ {"name":"Claude and GPT models","buckets":[
+  {"window":"weekly","remaining_fraction":1,"reset_time":"$(iso "$in3d")"},
+  {"window":"5h","remaining_fraction":1,"reset_time":"$(iso "$in2h")"}]},
+ {"name":"Gemini 4 Argon","buckets":[
+  {"window":"weekly","remaining_fraction":0.97,"reset_time":"$(iso "$in3d")"}]}]}}}
+JSON
+check "$("$bin/agent-limits" agy)" "5h 8% 2h0m  7d 2% 3d" "agy: other model groups left out"
+check "$("$bin/agent-limits" agy --3p)" "5h 0% 2h0m  7d 0% 3d" "agy --3p: other model groups left out"
+check "$("$bin/agent-limits" all | grep '^agy')" "$(printf '%s\n' \
+  'agy        5h  8% 2h0m  7d  2% 3d' \
+  'agy 3p     5h  0% 2h0m  7d  0% 3d' \
+  'agy argon               7d  3% 3d')" "all: other model group on its own labeled row"
+
 # agy: stale cache triggers detached background refresh.
 touch -d '2 minutes ago' "$XDG_CACHE_HOME/agent-limits/agy.json"
 fake_agy="$tmp/fake-agy"

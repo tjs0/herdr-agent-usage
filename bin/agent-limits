@@ -43,7 +43,9 @@ codex_metrics() {
 
 # agy /usage JSON on stdin -> per group five lines:
 #   label / 5h used% / 5h reset epoch / weekly used% / weekly reset epoch
-# Label: "Claude and GPT models" -> "claude/gpt". Used = 100 - remaining.
+# Label: "Gemini Models" -> "gemini", "Claude and GPT models" -> "3p", any
+# other group by the words that set it apart: "Gemini 4 Argon" -> "argon".
+# Used = 100 - remaining.
 # A bucket agy marks disabled (the 5h one once the weekly limit is hit) has no
 # reset_time and does not apply, so its window stays empty.
 agy_metrics_from_json() {
@@ -52,7 +54,10 @@ agy_metrics_from_json() {
     def epoch: if .reset_time == null then "" else (.reset_time | sub("\\.[0-9]+"; "") | fromdateiso8601) end;
     .command.data.groups[] |
     (.buckets | map(select(.disabled != true) | {key: .window, value: .}) | from_entries) as $b |
-    (.name | ascii_downcase | sub(" models$"; "") | gsub(" and "; "/")),
+    (.name | ascii_downcase | sub(" models$"; "") |
+      if . == "gemini" then . elif . == "claude and gpt" then "3p"
+      else (split(" ") | map(select(. != "gemini" and (test("^[0-9.]+$") | not)))
+        | join(" ") | if . == "" then "other" else . end) end),
     ($b["5h"] | used), ($b["5h"] | epoch),
     ($b.weekly | used), ($b.weekly | epoch)'
 }
@@ -147,18 +152,15 @@ show_codex() {
 }
 
 # show_agy LABEL [gemini|3p]: every model group, or only Gemini's or only the
-# third-party (non-Gemini) groups.
+# third-party (Claude and GPT) one.
 show_agy() {
   agy_refresh
   local f="$cache_dir/agy.json" only="${2:-}" m i label
   [ -r "$f" ] || return 0
   mapfile -t m < <(agy_metrics_from_json < "$f" 2>/dev/null)
   for (( i = 0; i + 4 < ${#m[@]}; i += 5 )); do
-    case "$only:${m[i]}" in
-      gemini:gemini | 3p:gemini) [ "$only" = gemini ] || continue ;;
-      gemini:*) continue ;;
-    esac
-    label=agy; [ "${m[i]}" = gemini ] || label="agy 3p"
+    [ -z "$only" ] || [ "$only" = "${m[i]}" ] || continue
+    label=agy; [ "${m[i]}" = gemini ] || label="agy ${m[i]}"
     render "${1:+$label}" "${m[i+1]}" "${m[i+2]}" "${m[i+3]}" "${m[i+4]}"
   done
 }
