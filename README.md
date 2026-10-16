@@ -70,8 +70,9 @@ command = "agent-usage.popup"
 description = "agent usage"
 ```
 
-The action opens the `usage` pane as a popup sized to the table. Any key
-closes it.
+The action opens the `usage` pane as a popup sized to the table. The popup is
+a snapshot: Herdr cannot resize an open popup, so a redrawn table that grew
+would overflow it. Reopen it for fresh numbers. Any key closes it.
 
 ### Tab bar
 
@@ -171,7 +172,7 @@ roots follow `XDG_CACHE_HOME`.
 ## Commands
 
 ```
-agent-limits [all|claude|codex|agy [--3p]|watch|popup]
+agent-limits [all|claude|codex|agy [--3p]|view|popup]
 ```
 
 `agy` is the Gemini model group and `agy --3p` the third-party Claude and GPT

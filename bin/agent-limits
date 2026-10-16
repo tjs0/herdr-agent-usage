@@ -7,8 +7,8 @@
 #   agent-limits agy --3p  agy's third-party (Claude and GPT) 5h/weekly
 #   agent-limits claude  5h/7d from the shared Claude account file
 #   agent-limits all     every agent above as a labeled, column-aligned table
-#   agent-limits watch   `all`, redrawn every 5s until a key is pressed
-#   agent-limits popup   open `watch` in the Agent Usage popup, sized to fit
+#   agent-limits view    the popup screen, shown until a key is pressed
+#   agent-limits popup   open `view` in the Agent Usage popup, sized to fit
 #
 # Codex writes rate_limits into its rollout JSONL on each turn, so its numbers
 # are only as fresh as the last Codex turn. agy answers `-p /usage` without an
@@ -137,7 +137,7 @@ align() {
     }'
 }
 
-# The watch screen: a blank line and two columns of margin around the table.
+# The popup screen: a blank line and two columns of margin around the table.
 footer="any key closes"
 screen() {
   local out
@@ -180,21 +180,25 @@ case "${1:-all}" in
     esac ;;
   claude) show_claude ;;
   all)    table=1; { show_claude label; show_codex label; show_agy label; } | align ;;
-  watch)
-    printf '\033[?25l'
-    while :; do
-      printf '\033[H\033[2J%s' "$(screen)"
-      read -rsn1 -t 5 && break
-    done ;;
+  view)
+    # The snapshot `popup` sized the popup to, so the two always agree.
+    # Herdr cannot resize an open popup, so the screen is not redrawn.
+    snap="$cache_dir/popup-screen"
+    if [ -r "$snap" ]; then s="$(cat "$snap")"; rm -f "$snap"; else s="$(screen)"; fi
+    printf '\033[?25l\033[H\033[2J%s' "$s"
+    read -rsn1 ;;
   popup)
-    # Open the agent-usage plugin's popup sized to the current screen: its
-    # widest line plus two columns of right margin, Herdr's scrollbar column
-    # and the border; its lines plus a blank bottom row and the border.
-    s="$(screen | sed 's/\x1b\[[0-9;]*m//g')"
+    # Snapshot the screen for `view` and open the agent-usage plugin's popup
+    # sized to it: its widest line plus two columns of right margin, Herdr's
+    # scrollbar column and the border; its lines plus a blank bottom row and
+    # the border.
+    mkdir -p "$cache_dir"
+    screen > "$cache_dir/popup-screen"
+    s="$(sed 's/\x1b\[[0-9;]*m//g' "$cache_dir/popup-screen")"
     w="$(printf '%s\n' "$s" | awk '{ if (length($0) > w) w = length($0) } END { print w + 0 }')"
     h="$(printf '%s\n' "$s" | wc -l)"
     "${HERDR_BIN_PATH:-herdr}" plugin pane open --plugin agent-usage --entrypoint usage \
       --width "$(( w + 2 + 1 + 2 ))" --height "$(( h + 1 + 2 ))" >/dev/null ;;
-  *) echo "usage: agent-limits [codex|agy [--3p]|claude|all|watch|popup]" >&2; exit 2 ;;
+  *) echo "usage: agent-limits [codex|agy [--3p]|claude|all|view|popup]" >&2; exit 2 ;;
 esac
 exit 0

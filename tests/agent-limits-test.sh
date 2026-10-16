@@ -136,12 +136,20 @@ check "$("$bin/agent-limits" all | head -2)" "$(printf '%s\n' \
   'codex   5h  66% 2h0m  7d 12% 3d')" "all: 100% widens the percent column"
 printf '%s\n' 13 "$in2h" 52 "$in3d" > "$cl"
 
-# popup: sized to the watch screen. Widest line: 2 margin + 30 table columns;
+# popup: sized to the screen it snapshots for view. Widest line: 2 margin + 30 table columns;
 # 7 lines (blank, 4 rows, blank, footer).
 fake_open="$tmp/herdr-open"
 printf '#!/bin/sh\necho "$*" > "%s"\n' "$tmp/open-args" > "$fake_open"; chmod +x "$fake_open"
 HERDR_BIN_PATH="$fake_open" "$bin/agent-limits" popup
 check "$(cat "$tmp/open-args")" "plugin pane open --plugin agent-usage --entrypoint usage --width 37 --height 10" "popup: sized to fit"
+
+# view: shows popup's snapshot once, even after the data changes, and
+# consumes it; a later view renders fresh.
+printf '%s\n' 99 "$in2h" 52 "$in3d" > "$cl"
+v="$(printf x | "$bin/agent-limits" view | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g')"
+check "$(printf '%s\n' "$v" | grep '^  claude')" "  claude  5h 13% 2h0m  7d 52% 3d" "view: popup's snapshot, not newer data"
+check "$(printf x | "$bin/agent-limits" view | grep -c '5h 99%')" "1" "view: snapshot consumed, next view is fresh"
+printf '%s\n' 13 "$in2h" 52 "$in3d" > "$cl"
 
 # tab-right: the focused pane's agent picks the segment.
 fake="$tmp/herdr"

@@ -35,4 +35,4 @@ command = ["bash", "lib/link-bin"]
 id = "usage"
 title = "⠀⠀Agent Usage⠀⠀"
 placement = "popup"
-command = ["bash", "bin/agent-limits", "watch"]
+command = ["bash", "bin/agent-limits", "view"]
