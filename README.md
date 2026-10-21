@@ -6,7 +6,8 @@ rate limits you have used, and how full each pane's context is.
 - A popup with every agent's account-wide 5h and 7d usage: Claude Code, Codex
   and Antigravity (`agy`).
 - The same limits in the tab bar for the focused pane's agent.
-- A `ctx N%` token per pane on Herdr's agent sidebar, for Claude and Codex.
+- A `ctx N%` token per pane on Herdr's agent sidebar, for Claude, Codex and
+  agy.
 
 ```
  Agent Usage
@@ -95,6 +96,7 @@ Show the `$ctx` token on agent rows:
 [ui.sidebar.agents.rows_by_agent]
 claude = [["state_icon", "workspace", "tab"], ["agent", "$ctx"]]
 codex = [["state_icon", "workspace", "tab"], ["agent", "$ctx"]]
+agy = [["state_icon", "workspace", "tab"], ["agent", "$ctx"]]
 ```
 
 Copy your own `rows` and append `"$ctx"` to the agent row. Run
@@ -151,6 +153,26 @@ The ctx percentage is Codex's own "context left" complement, with its fixed
 first prompt, and nothing fires on `/clear`, so a cleared session keeps the old
 value until its next prompt.
 
+### Antigravity (agy)
+
+In `~/.gemini/antigravity-cli/settings.json`. `agy-statusline` prints
+`ctx N%` as agy's custom status line and, inside Herdr, reports the pane's
+`ctx`. `stack_with_default` keeps agy's own status line above it.
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "$HOME/.config/herdr/plugins/config/agent-usage/bin/agy-statusline",
+    "stack_with_default": true
+  }
+}
+```
+
+The percentage is agy's own `context_window.used_percentage` from the status
+line payload. A session still loading reports a zero window and shows `ctx ?%`;
+a loaded session with no turns, or one just cleared, shows `ctx 0%`.
+
 ## Freshness
 
 - Claude: from the account file `~/.cache/agent-limits/claude`, which every
@@ -164,7 +186,6 @@ value until its next prompt.
   is cached in `~/.cache/agent-limits/agy.json` and refreshed in the background
   once it is a minute old (`AGY_TTL` seconds), so the tab bar never waits on it.
 - A window whose reset time has passed shows `0%`.
-- agy has no ctx: no readable source for its context usage is known.
 
 Per-pane Claude metrics live in `~/.cache/claude-herdr/<pane-id>`. Both cache
 roots follow `XDG_CACHE_HOME`.

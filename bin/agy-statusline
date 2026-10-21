@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Antigravity (agy) statusLine command. Prints "ctx N%" as agy's custom status
+# line and, inside Herdr, reports the same value as the pane's $ctx sidebar token.
+#
+# agy pipes a Claude-Code-style JSON payload on stdin. context_window carries
+# used_percentage and context_window_size, both 0 until the session has loaded;
+# a zero window reports "?" so the pane drops the previous session's token.
+set -uo pipefail
+
+input="$(cat)"
+pct="$(printf '%s' "$input" | jq -r '
+  .context_window // {} | if (.context_window_size // 0) > 0
+    then (.used_percentage // 0) | floor else empty end' 2>/dev/null)"
+pct="${pct:-?}"
+printf 'ctx %s%%\n' "$pct"
+
+if [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ] && [ -n "${HERDR_BIN_PATH:-}" ]; then
+  "$HERDR_BIN_PATH" pane report-metadata "$HERDR_PANE_ID" \
+    --source custom:agy-metrics --token "ctx=ctx ${pct}%" \
+    --seq "$(date +%s%N)" >/dev/null 2>&1 &
+fi
+exit 0
